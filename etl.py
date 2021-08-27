@@ -9,11 +9,15 @@ from pyspark.sql.functions import year, month, dayofmonth, hour, weekofyear, dat
 config = configparser.ConfigParser()
 config.read('dl.cfg')
 
-os.environ['AWS_ACCESS_KEY_ID']=config['AWS_ACCESS_KEY_ID']
-os.environ['AWS_SECRET_ACCESS_KEY']=config['AWS_SECRET_ACCESS_KEY']
+os.environ['AWS_ACCESS_KEY_ID']=config.get('AWS_ACCESS_KEY_ID')
+os.environ['AWS_SECRET_ACCESS_KEY']=config.get('AWS_SECRET_ACCESS_KEY')
 
 
 def create_spark_session():
+    """
+    Creates an new spark session or gets existing session.
+    :return: SparkSession
+    """
     spark = SparkSession \
         .builder \
         .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:2.7.0") \
@@ -22,29 +26,55 @@ def create_spark_session():
 
 
 def process_song_data(spark, input_data, output_data):
-    # get filepath to song data file
-    song_data = 's3n://udacity-dend/song-data'
-    
+    """
+    Processes song_data (JSON) from s3 input bucket and stores it in s3 output bucket as parquet files.
+    :param spark: SparkSession
+    :param input_data: s3 location of all song_data
+    :param output_data: s3 location of output data
+
+    """
+
+    song_data = os.path.join(input_data, 'song_data/*/*/*/*.json')
+
+    song_schema = StructType([
+        StructField("artist_id", StringType()),
+        StructField("artist_latitude", DoubleType()),
+        StructField("artist_longitude", StringType()),
+        StructField("artist_location", StringType()),
+        StructField("artist_name", StringType()),
+        StructField("duration", DoubleType()),
+        StructField("num_songs", IntegerType()),
+        StructField("title", StringType()),
+        StructField("year", IntegerType())
+    ])
+
     # read song data file
-    df = spark.read.load(song_data, format='json')
+    df = spark.read.load(song_data, schema=song_schema, format='json')
 
     # extract columns to create songs table
-    songs_table = df.select(["artist_id", "song_id", "title", "year", "duration"])
+    songs_table = (df.select(["artist_id", "title", "year", "duration"])
+                   .dropDuplicates().withColumn("song_id", monotonically_increasing_id()))
     
     # write songs table to parquet files partitioned by year and artist
-    songs_table.write.partitionBy('year', 'artist')\
+    songs_table.write.mode("overwrite").partitionBy('year', 'artist_id')\
         .parquet(output_data + 'songs/songs_table.parquet')
 
     # extract columns to create artists table
     artists_table = df.select(["artist_id",  "artist_name", "artist_location", "artist_latitude", "artist_longitude"])
     
     # write artists table to parquet files
-    artists_table.write.parquet(output_data + 'artist/artist_table.parquet')
+    artists_table.write.parquet(output_data + 'artist/artist_table.parquet').dropDuplicates()
 
 
 def process_log_data(spark, input_data, output_data):
+    """
+    Processes log_data (JSON) from s3 input bucket and stores it in s3 output bucket as parquet files.
+    :param spark: SparkSession
+    :param input_data: s3 location of all log_data
+    :param output_data: s3 location of output data
+    """
     # get filepath to log data file
-    log_data = 's3n://udacity-dend/log_data'
+    log_data = os.path.join(input_data, "log_data/*/*/*.json")
 
     # read log data file
     df = spark.read.load(log_data, format='json')
